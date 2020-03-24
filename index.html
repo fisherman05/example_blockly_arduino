@@ -8,6 +8,7 @@
 		<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js" integrity="sha384-JjSmVgyd0p3pXB1rRibZUAYoIIy6OrQ6VrjIEaFf/nJGzIxFDsf4x0xIM+B07jRM" crossorigin="anonymous"></script>
 
 		<!-- libraries for blockly and ardublockly -->
+		<script src="acorn_interpreter.js"></script>
 		<script src="blockly_compressed.js"></script>
 		<script src="blocks_compressed.js"></script>
 		<script src="en.js"></script>
@@ -43,9 +44,12 @@
 						<h1>Prototype</h1>
 					</div>
 					<h3>&nbsp;</h3>
-					<div class="row" style="height: 900px">
+					<div class="row" style="height: 900px; width: 1200px;">
 						<div class="col-md-12">
 							<button type="button" class="btn btn-dark" onclick="showCodeArduino()">Arduino</button>
+							<button type="button" class="btn btn-dark" onclick="stepCode()" id="stepButton">Step</button>
+							<button type="button" class="btn btn-dark" onclick="loadTemplate()">Load</button>
+							<button type="button" class="btn btn-dark" onclick="clearCanvas()">Clear</button>
 							<h3>&nbsp;</h3>
 							<div id="blocklyDiv" style="height: 720px"></div>
 						</div>
@@ -107,24 +111,165 @@
 			    </block> 
 			</category>
 		</xml>
+		<xml xmlns="https://developers.google.com/blockly/xml" id="startBlocks" style="display: none">
+		    <block type="variables_set" id="set_n_initial" inline="true" x="20" y="20">
+		      <field name="VAR">n</field>
+		      <value name="VALUE">
+		        <block type="math_number">
+		          <field name="NUM">1</field>
+		        </block>
+		      </value>
+		      <next>
+		        <block type="controls_repeat_ext" id="repeat" inline="true">
+		          <value name="TIMES">
+		            <block type="math_number">
+		              <field name="NUM">4</field>
+		            </block>
+		          </value>
+		          <statement name="DO">
+		            <block type="variables_set" id="set_n_update" inline="true">
+		              <field name="VAR">n</field>
+		              <value name="VALUE">
+		                <block type="math_arithmetic" inline="true">
+		                  <field name="OP">MULTIPLY</field>
+		                  <value name="A">
+		                    <block type="variables_get">
+		                      <field name="VAR">n</field>
+		                    </block>
+		                  </value>
+		                  <value name="B">
+		                    <block type="math_number">
+		                      <field name="NUM">2</field>
+		                    </block>
+		                  </value>
+		                </block>
+		              </value>
+		              <next>
+		                <block type="text_print" id="print">
+		                  <value name="TEXT">
+		                    <block type="variables_get">
+		                      <field name="VAR">n</field>
+		                    </block>
+		                  </value>
+		                </block>
+		              </next>
+		            </block>
+		          </statement>
+		        </block>
+		      </next>
+		    </block>
+		  </xml>
 	</body>
 	
 	<script>
-	  var workspace = Blockly.inject('blocklyDiv',
-		  {toolbox: document.getElementById('toolbox')});
+    var demoWorkspace = Blockly.inject('blocklyDiv',
+        {toolbox: document.getElementById('toolbox')});
 
-	  function showCodeJS() {
+
+    var stepButton = document.getElementById('stepButton');
+    var myInterpreter = null;
+
+
+    function loadTemplate()
+    {
+    	Blockly.Xml.domToWorkspace(document.getElementById('startBlocks'), demoWorkspace);
+    }
+
+    function clearCanvas()
+    {
+    	Blockly.mainWorkspace.clear();
+    }
+
+	function showCodeJS() 
+	{
 	      // Generates Arduino code to display it.
 	      Blockly.JavaScript.INFINITE_LOOP_TRAP = null;
-	      var code = Blockly.JavaScript.workspaceToCode(workspace);
+	      var code = Blockly.JavaScript.workspaceToCode(demoWorkspace);
+		  
 	      alert(code);
-	  }
+	}
 
-	  function showCodeArduino() {
+	function showCodeArduino() 
+	{
 	      // Generates Arduino code to display it.
 	      Blockly.Arduino.INFINITE_LOOP_TRAP = null;
-	      var code = Blockly.Arduino.workspaceToCode(workspace);
+	      var code = Blockly.Arduino.workspaceToCode(demoWorkspace);
 	      alert(code);
-	  }
-	</script>
+	}
+
+
+    function initApi(interpreter, scope) 
+    {
+
+      // Add an API function for highlighting blocks.
+      var wrapper = function(id) {
+        id = String(id || '');
+        return interpreter.createPrimitive(highlightBlock(id));
+      };
+      interpreter.setProperty(scope, 'highlightBlock',
+          interpreter.createNativeFunction(wrapper));
+    }
+
+    var highlightPause = false;
+    var latestCode = '';
+
+    function highlightBlock(id) {
+    	alert('Current Block: ' + id);
+      demoWorkspace.highlightBlock(id);
+      highlightPause = true;
+    }
+
+    function generateCodeAndLoadIntoInterpreter() {
+      // Generate JavaScript code and parse it.
+      Blockly.JavaScript.STATEMENT_PREFIX = 'highlightBlock(%1);\n';
+      Blockly.JavaScript.addReservedWords('highlightBlock');
+      latestCode = Blockly.JavaScript.workspaceToCode(demoWorkspace);
+    }
+
+    function stepCode() {
+      if (!myInterpreter) {
+        // First statement of this code.
+        myInterpreter = new Interpreter(latestCode, initApi);
+
+        // And then show generated code in an alert.
+        // In a timeout to allow the outputArea.value to reset first.
+        setTimeout(function() {
+          highlightPause = true;
+          stepCode();
+        }, 1);
+        return;
+      }
+      highlightPause = false;
+      do {
+        try {
+          var hasMoreCode = myInterpreter.step();
+        } finally {
+          if (!hasMoreCode) {
+            // Program complete, no more code to execute.
+
+            myInterpreter = null;
+
+            // Cool down, to discourage accidentally restarting the program.
+            stepButton.disabled = 'disabled';
+            setTimeout(function() {
+              stepButton.disabled = '';
+            }, 2000);
+
+            return;
+          }
+        }
+        // Keep executing until a highlight statement is reached,
+        // or the code completes or errors.
+      } while (hasMoreCode && !highlightPause);
+    }
+
+    // Load the interpreter now, and upon future changes.
+    generateCodeAndLoadIntoInterpreter();
+    demoWorkspace.addChangeListener(function(event) {
+      if (!(event instanceof Blockly.Events.Ui)) {
+        // Something changed. Parser needs to be reloaded.
+        generateCodeAndLoadIntoInterpreter();
+      }
+    });
+  </script>
 </html>
